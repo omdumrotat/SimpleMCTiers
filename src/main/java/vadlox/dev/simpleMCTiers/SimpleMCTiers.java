@@ -438,15 +438,16 @@ public final class SimpleMCTiers extends JavaPlugin implements TabExecutor {
                         .getAsJsonObject().get("points").getAsInt();
                 } catch(Exception e){return ChatColor.RED+"N/A";}
             }
-            // thresholds
-            if (pts>=100) return "S";
-            if (pts>=50)  return "X";
-            if (pts>=25)  return "V";
-            if (pts>=15)  return "IV";
-            if (pts>=10)  return "III";
-            if (pts>=5)   return "II";
-            if (pts>=1)   return "I";
-            return ChatColor.RED+"N/A";
+// thresholds
+            if (pts >= 100) return ChatColor.YELLOW + "S";      // &e
+            if (pts >= 50)  return ChatColor.RED + "X";         // &c
+            if (pts >= 25)  return ChatColor.LIGHT_PURPLE + "V";// &d
+            if (pts >= 15)  return ChatColor.GRAY + "IV";       // &7
+            if (pts >= 10)  return ChatColor.GRAY + "III";      // &7
+            if (pts >= 5)   return ChatColor.GRAY + "II";       // &7
+            if (pts >= 1)   return ChatColor.DARK_GRAY + "I";   // &8
+            return ChatColor.RED + "N/A";
+
         }
     }
 
