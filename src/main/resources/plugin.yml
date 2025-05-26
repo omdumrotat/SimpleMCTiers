@@ -1,5 +1,5 @@
 name: SimpleMCTiers
-version: '1.0'
+version: '2.0'
 main: vadlox.dev.simpleMCTiers.SimpleMCTiers
 api-version: '1.21'
 description: The Ultimate Clans Plugin.
@@ -10,7 +10,6 @@ authors:
 commands:
   tier:
     description: Get the tier of a player.
-    usage: /tier <player>
     permission: simplemctiers.tier
     permission-message: You do not have permission to use this command.
 permissions:
