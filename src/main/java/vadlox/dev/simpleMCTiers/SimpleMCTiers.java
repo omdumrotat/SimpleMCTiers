@@ -43,6 +43,7 @@ public final class SimpleMCTiers extends JavaPlugin {
                 getLogger().warning("PlaceholderAPI support may be limited in 1.8.");
             } else {
                 new TierPlaceholderExpansion(this).register();
+                new CombatRankPlaceholderExpansion(this).register();
             }
         } else {
             getLogger().warning("PlaceholderAPI not found. Placeholders will not be available.");
@@ -72,7 +73,6 @@ public final class SimpleMCTiers extends JavaPlugin {
 
         Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
             try {
-                // Check valid username
                 if (!isValidMinecraftUsername(playerName)) {
                     sender.sendMessage(PREFIX + ChatColor.RED + "That Minecraft username doesn't exist.");
                     return;
@@ -88,7 +88,6 @@ public final class SimpleMCTiers extends JavaPlugin {
                     sender.sendMessage(PREFIX + ChatColor.RED + "That player is unranked in " + capitalize(mode) + ".");
                     return;
                 }
-                // Display tier, capitalize player name first char
                 sender.sendMessage(formatSingleTier(json, capitalize(playerName), mode));
             } catch (IOException e) {
                 sender.sendMessage(PREFIX + ChatColor.RED + "Player isn't registered with McTiers.");
@@ -115,7 +114,6 @@ public final class SimpleMCTiers extends JavaPlugin {
         conn.setRequestMethod("GET");
         int code = conn.getResponseCode();
         if (code == 404) {
-            // user not registered
             return new JsonObject().toString();
         } else if (code != 200) {
             return new JsonObject().toString();
@@ -202,6 +200,38 @@ public final class SimpleMCTiers extends JavaPlugin {
                 // silent fail
             }
             return ChatColor.RED + "N/A";
+        }
+    }
+
+    public class CombatRankPlaceholderExpansion extends PlaceholderExpansion {
+        private final SimpleMCTiers plugin;
+        public CombatRankPlaceholderExpansion(SimpleMCTiers plugin) { this.plugin = plugin; }
+
+        @NotNull @Override public String getIdentifier() { return "combatrank"; }
+        @NotNull @Override public String getAuthor()     { return plugin.getDescription().getAuthors().toString(); }
+        @NotNull @Override public String getVersion()    { return plugin.getDescription().getVersion(); }
+        @Override public boolean persist()               { return true; }
+        @Override public boolean canRegister()           { return true; }
+
+        @Nullable @Override
+        public String onPlaceholderRequest(Player player, @NotNull String params) {
+            if (player == null || !params.equalsIgnoreCase("overall")) return "";
+            try {
+                String json = plugin.fetchTierData(player.getName());
+                JsonObject data = JsonParser.parseString(json).getAsJsonObject();
+                if (!data.has("points")) return ChatColor.RED + "N/A";
+                int pts = data.get("points").getAsInt();
+                if (pts >= 100) return "S";
+                if (pts >= 50) return "X";
+                if (pts >= 25) return "V";
+                if (pts >= 15) return "IV";
+                if (pts >= 10) return "III";
+                if (pts >= 5)  return "II";
+                if (pts >= 1)  return "I";
+                return ChatColor.RED + "N/A";
+            } catch (IOException e) {
+                return ChatColor.RED + "N/A";
+            }
         }
     }
 }
