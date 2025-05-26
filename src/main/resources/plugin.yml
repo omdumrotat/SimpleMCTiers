@@ -7,12 +7,25 @@ website: vadlox.hydraquest.net
 depend: [ PlaceholderAPI ]
 authors:
   - Vadlox
+
 commands:
   tier:
-    description: Get the tier of a player.
+    description: Get the tier of a player in a specific gamemode.
+    usage: /<command> <player> <gamemode>
     permission: simplemctiers.tier
     permission-message: You do not have permission to use this command.
+
+  simplemctiers:
+    description: Admin tool for SimpleMCTiers overrides.
+    usage: /simplemctiers <settier|setcombatrank|setpoints|reset> ...
+    permission: simplemctiers.admin
+    permission-message: You do not have permission to use this command.
+
 permissions:
   simplemctiers.tier:
-    description: Allows the use of the /tier command
+    description: Allows use of the /tier command
     default: true
+
+  simplemctiers.admin:
+    description: Allows management of overrides via /simplemctiers
+    default: op
