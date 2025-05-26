@@ -24,20 +24,14 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 public final class SimpleMCTiers extends JavaPlugin {
-    // ------------------------------------------------------------------------
-    // Constants & Fields
-    // ------------------------------------------------------------------------
-    private static final String MOJANG_API_URL = "https://api.mojang.com/users/profiles/minecraft/";
-    private static final String MCTIERS_API_URL = "https://mctiers.com/api/search_profile/";
-    private static final String PREFIX = ChatColor.translateAlternateColorCodes('&', "&e&lTiers&8 » ");
-    private static final List<String> GAMEMODES = Arrays.asList(
+    private static final String MOJANG_API_URL   = "https://api.mojang.com/users/profiles/minecraft/";
+    private static final String MCTIERS_API_URL  = "https://mctiers.com/api/search_profile/";
+    private static final String PREFIX           = ChatColor.translateAlternateColorCodes('&', "&e&lTiers&8 » ");
+    private static final List<String> GAMEMODES  = Arrays.asList(
             "axe", "nethop", "uhc", "mace", "smp", "pot", "vanilla", "sword"
     );
     private final ConcurrentHashMap<String, String> cache = new ConcurrentHashMap<>();
 
-    // ------------------------------------------------------------------------
-    // Plugin Lifecycle
-    // ------------------------------------------------------------------------
     @Override
     public void onEnable() {
         getLogger().info("SimpleMCTiers has been enabled");
@@ -61,20 +55,16 @@ public final class SimpleMCTiers extends JavaPlugin {
         cache.clear();
     }
 
-    // ------------------------------------------------------------------------
-    // Command Handling
-    // ------------------------------------------------------------------------
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (!command.getName().equalsIgnoreCase("tier")) return false;
-        // Only scoped usage
         if (args.length != 2) {
             sender.sendMessage(PREFIX + ChatColor.RED + "Usage: /tier <player> <gamemode>");
             return false;
         }
 
         String playerName = args[0];
-        String mode = args[1].toLowerCase(Locale.ROOT);
+        String mode       = args[1].toLowerCase(Locale.ROOT);
         if (!GAMEMODES.contains(mode)) {
             sender.sendMessage(PREFIX + ChatColor.RED + "Invalid gamemode. Available: " + String.join(", ", GAMEMODES));
             return false;
@@ -82,22 +72,34 @@ public final class SimpleMCTiers extends JavaPlugin {
 
         Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
             try {
+                // Check valid username
+                if (!isValidMinecraftUsername(playerName)) {
+                    sender.sendMessage(PREFIX + ChatColor.RED + "That Minecraft username doesn't exist.");
+                    return;
+                }
                 String json = fetchTierData(playerName);
-                sender.sendMessage(formatSingleTier(json, playerName, mode));
+                JsonObject data = JsonParser.parseString(json).getAsJsonObject();
+                if (!data.has("name")) {
+                    sender.sendMessage(PREFIX + ChatColor.RED + "Player isn't registered with McTiers.");
+                    return;
+                }
+                JsonObject rankings = data.getAsJsonObject("rankings");
+                if (!rankings.has(mode)) {
+                    sender.sendMessage(PREFIX + ChatColor.RED + "That player is unranked in " + capitalize(mode) + ".");
+                    return;
+                }
+                // Display tier, capitalize player name first char
+                sender.sendMessage(formatSingleTier(json, capitalize(playerName), mode));
             } catch (IOException e) {
-                sender.sendMessage(PREFIX + ChatColor.RED + "Error fetching tier data.");
-                getLogger().severe("Error: " + e.getMessage());
+                sender.sendMessage(PREFIX + ChatColor.RED + "Player isn't registered with McTiers.");
             }
         });
         return true;
     }
 
-    // ------------------------------------------------------------------------
-    // Data Fetching & Caching
-    // ------------------------------------------------------------------------
     private boolean isValidMinecraftUsername(String playerName) throws IOException {
         URL url = new URL(MOJANG_API_URL + playerName);
-        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        HttpURLConnection conn = (HttpURLConnection)url.openConnection();
         conn.setRequestMethod("GET");
         if (conn.getResponseCode() != 200) return false;
         try (BufferedReader r = new BufferedReader(new InputStreamReader(conn.getInputStream()))) {
@@ -108,69 +110,47 @@ public final class SimpleMCTiers extends JavaPlugin {
 
     private String fetchTierData(String playerName) throws IOException {
         if (cache.containsKey(playerName)) return cache.get(playerName);
-        if (!isValidMinecraftUsername(playerName)) return createErrorResponse(playerName);
-
         URL url = new URL(MCTIERS_API_URL + playerName);
-        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        HttpURLConnection conn = (HttpURLConnection)url.openConnection();
         conn.setRequestMethod("GET");
-        if (conn.getResponseCode() != 200) {
-            getLogger().severe("HTTP error code: " + conn.getResponseCode());
-            return ChatColor.RED + "Error: User not registered on McTiers";
+        int code = conn.getResponseCode();
+        if (code == 404) {
+            // user not registered
+            return new JsonObject().toString();
+        } else if (code != 200) {
+            return new JsonObject().toString();
         }
-
         try (BufferedReader r = new BufferedReader(new InputStreamReader(conn.getInputStream()))) {
             StringBuilder sb = new StringBuilder();
             String line;
             while ((line = r.readLine()) != null) sb.append(line);
-            JsonObject json = JsonParser.parseString(sb.toString()).getAsJsonObject();
-            if (!json.has("name")) {
-                return ChatColor.RED + "Error: User not registered on McTiers";
-            }
             String data = sb.toString();
             cache.put(playerName, data);
             return data;
         }
     }
 
-    private String createErrorResponse(String playerName) {
-        JsonObject err = new JsonObject();
-        err.addProperty("name", playerName);
-        err.addProperty("region", "N/A");
-        err.add("rankings", new JsonObject());
-        return err.toString();
-    }
-
-    // ------------------------------------------------------------------------
-    // Formatting Responses
-    // ------------------------------------------------------------------------
     private String formatSingleTier(String jsonResponse, String playerName, String gamemode) {
         JsonObject json = JsonParser.parseString(jsonResponse).getAsJsonObject();
         StringBuilder out = new StringBuilder(PREFIX);
         JsonObject ranks = json.getAsJsonObject("rankings");
-        if (ranks != null && ranks.has(gamemode)) {
-            JsonObject rank = ranks.getAsJsonObject(gamemode);
-            int tier = rank.get("tier").getAsInt();
-            int pos = rank.get("pos").getAsInt();
-            String ts = (pos == 0 ? "HT" : "LT") + tier;
-            out.append(ChatColor.GREEN)
-                    .append(playerName).append("’s ")
-                    .append(capitalize(gamemode)).append(" Tier: ")
-                    .append(ChatColor.AQUA).append(ts);
-            if (pos > 1) out.append(ChatColor.GRAY).append(" (Position ").append(pos).append(")");
-        } else {
-            out.append(ChatColor.RED).append("No data for that gamemode.");
-        }
+        JsonObject rank = ranks.getAsJsonObject(gamemode);
+        int tier = rank.get("tier").getAsInt();
+        int pos  = rank.get("pos").getAsInt();
+        String ts = (pos == 0 ? "HT" : "LT") + tier;
+        out.append(ChatColor.GREEN)
+                .append(playerName).append("’s ")
+                .append(capitalize(gamemode)).append(" Tier: ")
+                .append(ChatColor.AQUA).append(ts);
+        if (pos > 1) out.append(ChatColor.GRAY).append(" (Position ").append(pos).append(")");
         return out.toString();
     }
 
     private String capitalize(String s) {
-        return (s == null || s.isEmpty()) ? s
-                : s.substring(0, 1).toUpperCase(Locale.ROOT) + s.substring(1);
+        if (s == null || s.isEmpty()) return s;
+        return s.substring(0,1).toUpperCase(Locale.ROOT) + s.substring(1);
     }
 
-    // ------------------------------------------------------------------------
-    // Tab Completer
-    // ------------------------------------------------------------------------
     public class TierTabCompleter implements TabCompleter {
         @Override
         public @Nullable List<String> onTabComplete(CommandSender sender,
@@ -192,46 +172,17 @@ public final class SimpleMCTiers extends JavaPlugin {
         }
     }
 
-    // ------------------------------------------------------------------------
-    // PlaceholderAPI Expansion
-    // ------------------------------------------------------------------------
     public class TierPlaceholderExpansion extends PlaceholderExpansion {
         private final SimpleMCTiers plugin;
+        public TierPlaceholderExpansion(SimpleMCTiers plugin) { this.plugin = plugin; }
 
-        public TierPlaceholderExpansion(SimpleMCTiers plugin) {
-            this.plugin = plugin;
-        }
+        @NotNull @Override public String getIdentifier() { return "tier"; }
+        @NotNull @Override public String getAuthor()     { return plugin.getDescription().getAuthors().toString(); }
+        @NotNull @Override public String getVersion()    { return plugin.getDescription().getVersion(); }
+        @Override public boolean persist()               { return true; }
+        @Override public boolean canRegister()           { return true; }
 
-        @NotNull
-        @Override
-        public String getIdentifier() {
-            return "tier";
-        }
-
-        @NotNull
-        @Override
-        public String getAuthor() {
-            return plugin.getDescription().getAuthors().toString();
-        }
-
-        @NotNull
-        @Override
-        public String getVersion() {
-            return plugin.getDescription().getVersion();
-        }
-
-        @Override
-        public boolean persist() {
-            return true;
-        }
-
-        @Override
-        public boolean canRegister() {
-            return true;
-        }
-
-        @Nullable
-        @Override
+        @Nullable @Override
         public String onPlaceholderRequest(Player player, @NotNull String params) {
             if (player == null) return "";
             String mode = params.toLowerCase(Locale.ROOT);
@@ -244,33 +195,13 @@ public final class SimpleMCTiers extends JavaPlugin {
                 if (ranks != null && ranks.has(mode)) {
                     JsonObject r = ranks.getAsJsonObject(mode);
                     int tier = r.get("tier").getAsInt();
-                    int pos = r.get("pos").getAsInt();
+                    int pos  = r.get("pos").getAsInt();
                     return (pos == 0 ? "HT" : "LT") + tier;
                 }
             } catch (IOException e) {
-                plugin.getLogger().severe("Error fetching tier data: " + e.getMessage());
+                // silent fail
             }
             return ChatColor.RED + "N/A";
         }
     }
 }
-
-// Extra blank lines to exceed length
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
