@@ -24,13 +24,13 @@ public final class SimpleMCTiers extends JavaPlugin implements TabExecutor {
     // ------------------------------------------------------------------------
     // Constants & Fields
     // ------------------------------------------------------------------------
-    private static final String MOJANG_API_URL  = "https://api.mojang.com/users/profiles/minecraft/";
-    private static final String MCTIERS_API_URL = "https://mctiers.com/api/search_profile/";
-    private static final String PREFIX          = ChatColor.translateAlternateColorCodes('&', "&e&lTiers&8 » ");
-    private static final List<String> GAMEMODES = Arrays.asList(
-            "axe", "nethop", "uhc", "mace", "smp", "pot", "vanilla", "sword"
+    private static final String MOJANG_API_URL   = "https://api.mojang.com/users/profiles/minecraft/";
+    private static final String MCTIERS_API_URL  = "https://mctiers.com/api/search_profile/";
+    private static final String PREFIX           = ChatColor.translateAlternateColorCodes('&', "&e&lTiers&8 » ");
+    private static final List<String> GAMEMODES  = Arrays.asList(
+            "axe","nethop","uhc","mace","smp","pot","vanilla","sword"
     );
-    private static final List<String> RANKS = Arrays.asList("I","II","III","IV","V","X","S");
+    private static final List<String> COMBATRANKS= Arrays.asList("I","II","III","IV","V","X","S");
 
     private final ConcurrentHashMap<String, String> cache = new ConcurrentHashMap<>();
     private Connection connection;
@@ -41,27 +41,20 @@ public final class SimpleMCTiers extends JavaPlugin implements TabExecutor {
     @Override
     public void onEnable() {
         getLogger().info("SimpleMCTiers has been enabled");
-        // ensure data folder
         if (!getDataFolder().exists()) getDataFolder().mkdirs();
         setupDatabase();
 
-        // register /tier
+        // /tier
         getCommand("tier").setExecutor(this);
         getCommand("tier").setTabCompleter(this);
-        // register /simplemctiers
+        // /simplemctiers
         getCommand("simplemctiers").setExecutor(this);
         getCommand("simplemctiers").setTabCompleter(this);
 
-        // PlaceholderAPI hook
+        // PlaceholderAPI
         if (Bukkit.getPluginManager().getPlugin("PlaceholderAPI") != null) {
-            if (Bukkit.getVersion().contains("1.8")) {
-                getLogger().warning("PlaceholderAPI support may be limited in 1.8.");
-            } else {
-                new TierPlaceholderExpansion(this).register();
-                new CombatRankPlaceholderExpansion(this).register();
-            }
-        } else {
-            getLogger().warning("PlaceholderAPI not found. Placeholders will not be available.");
+            new TierPlaceholderExpansion(this).register();
+            new CombatRankPlaceholderExpansion(this).register();
         }
     }
 
@@ -69,9 +62,7 @@ public final class SimpleMCTiers extends JavaPlugin implements TabExecutor {
     public void onDisable() {
         getLogger().info("SimpleMCTiers has been disabled");
         cache.clear();
-        if (connection != null) {
-            try { connection.close(); } catch (SQLException ignored) {}
-        }
+        if (connection != null) try { connection.close(); } catch (SQLException ignored) {}
     }
 
     // ------------------------------------------------------------------------
@@ -79,53 +70,53 @@ public final class SimpleMCTiers extends JavaPlugin implements TabExecutor {
     // ------------------------------------------------------------------------
     private void setupDatabase() {
         try {
-            File dbFile = new File(getDataFolder(), "overrides.db");
-            String url = "jdbc:sqlite:" + dbFile.getAbsolutePath();
+            File db = new File(getDataFolder(), "overrides.db");
+            String url = "jdbc:sqlite:" + db.getAbsolutePath();
             connection = DriverManager.getConnection(url);
             try (Statement st = connection.createStatement()) {
-                st.executeUpdate("CREATE TABLE IF NOT EXISTS overrides (" +
-                        "username TEXT NOT NULL," +
-                        "gamemode TEXT," +
-                        "tier INTEGER," +
-                        "combatrank TEXT," +
-                        "points INTEGER," +
-                        "PRIMARY KEY(username, gamemode)" +
-                        ")");
+                st.executeUpdate("""
+                    CREATE TABLE IF NOT EXISTS overrides (
+                        username TEXT NOT NULL,
+                        gamemode TEXT,
+                        tier INTEGER,
+                        combatrank TEXT,
+                        points INTEGER,
+                        PRIMARY KEY(username, gamemode)
+                    )
+                """);
             }
         } catch (SQLException e) {
-            getLogger().severe("Could not set up database: " + e.getMessage());
+            getLogger().severe("DB setup failed: " + e.getMessage());
         }
     }
 
     // ------------------------------------------------------------------------
-    // Command Handling (both /tier and /simplemctiers)
+    // Commands
     // ------------------------------------------------------------------------
     @Override
     public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
-        String name = cmd.getName().toLowerCase();
-        if (name.equals("tier")) {
-            return handleTierCommand(sender, args);
-        } else if (name.equals("simplemctiers")) {
-            return handleAdminCommand(sender, args);
+        if (cmd.getName().equalsIgnoreCase("tier")) {
+            return handleTier(sender, args);
+        } else {
+            return handleAdmin(sender, args);
         }
-        return false;
     }
 
-    private boolean handleTierCommand(CommandSender sender, String[] args) {
+    private boolean handleTier(CommandSender sender, String[] args) {
         if (args.length != 2) {
             sender.sendMessage(PREFIX + ChatColor.RED + "Usage: /tier <player> <gamemode>");
             return false;
         }
-        String player = capitalize(args[0]);
-        String mode   = args[1].toLowerCase(Locale.ROOT);
+        String user = capitalize(args[0]);
+        String mode = args[1].toLowerCase(Locale.ROOT);
         if (!GAMEMODES.contains(mode)) {
             sender.sendMessage(PREFIX + ChatColor.RED + "Unknown gamemode.");
             return false;
         }
         Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
             try {
-                String json = fetchTierData(player);
-                sender.sendMessage(formatSingleTier(json, player, mode));
+                String json = fetchTierData(user);
+                sender.sendMessage(formatSingleTier(json, user, mode));
             } catch (IOException e) {
                 sender.sendMessage(PREFIX + ChatColor.RED + "Error fetching tier data.");
             }
@@ -133,7 +124,7 @@ public final class SimpleMCTiers extends JavaPlugin implements TabExecutor {
         return true;
     }
 
-    private boolean handleAdminCommand(CommandSender sender, String[] args) {
+    private boolean handleAdmin(CommandSender sender, String[] args) {
         if (!sender.hasPermission("simplemctiers.admin")) {
             sender.sendMessage(ChatColor.RED + "You lack permission.");
             return true;
@@ -147,157 +138,143 @@ public final class SimpleMCTiers extends JavaPlugin implements TabExecutor {
         try {
             switch (sub) {
                 case "settier" -> {
-                    if (args.length != 4) {
-                        sender.sendMessage(PREFIX + ChatColor.RED + "Usage: settier <player> <gamemode> <tier#>");
-                        return false;
-                    }
-                    String mode = args[2].toLowerCase();
-                    int tier = Integer.parseInt(args[3]);
-                    upsertOverride(user, mode, tier, null, null);
-                    sender.sendMessage(PREFIX + "Override set: " + user + " " + mode + " → tier " + tier);
+                    if (args.length != 4) throw new IllegalArgumentException("Usage: settier <player> <gamemode> <HT/LT#>");
+                    String mode = args[2].toLowerCase(Locale.ROOT);
+                    String code = args[3].toUpperCase();
+                    if (!GAMEMODES.contains(mode)) throw new IllegalArgumentException("Unknown gamemode.");
+                    if (!code.matches("H[Tt]\\d+|L[Tt]\\d+")) throw new IllegalArgumentException("Tier must be HT# or LT#");
+                    int tierVal = Integer.parseInt(code.substring(2));
+                    // store tier
+                    upsertOverride(user, mode, tierVal, null, null);
+                    // recalc and store combatrank based on current points
+                    recalcCombatRank(user);
+                    sender.sendMessage(PREFIX + "Set tier override: " + user + " #" + code + " in " + mode);
                 }
                 case "setcombatrank" -> {
-                    if (args.length != 3) {
-                        sender.sendMessage(PREFIX + ChatColor.RED + "Usage: setcombatrank <player> <rank>");
-                        return false;
-                    }
-                    String rank = args[2].toUpperCase();
-                    if (!RANKS.contains(rank)) {
-                        sender.sendMessage(PREFIX + ChatColor.RED + "Invalid rank.");
-                        return false;
-                    }
+                    if (args.length != 3) throw new IllegalArgumentException("Usage: setcombatrank <player> <rank>");
+                    String rank = args[2].toUpperCase(Locale.ROOT);
+                    if (!COMBATRANKS.contains(rank)) throw new IllegalArgumentException("Invalid rank.");
                     upsertOverride(user, null, null, rank, null);
-                    sender.sendMessage(PREFIX + "Override set: " + user + " → combatrank " + rank);
+                    sender.sendMessage(PREFIX + "Set Combat Rank override: " + user + " → " + rank);
                 }
                 case "setpoints" -> {
-                    if (args.length != 3) {
-                        sender.sendMessage(PREFIX + ChatColor.RED + "Usage: setpoints <player> <points#>");
-                        return false;
-                    }
+                    if (args.length != 3) throw new IllegalArgumentException("Usage: setpoints <player> <points>");
                     int pts = Integer.parseInt(args[2]);
                     upsertOverride(user, null, null, null, pts);
-                    sender.sendMessage(PREFIX + "Override set: " + user + " → points " + pts);
+                    recalcCombatRank(user);
+                    sender.sendMessage(PREFIX + "Set points override: " + user + " → " + pts);
                 }
                 case "reset" -> {
-                    if (args.length != 2) {
-                        sender.sendMessage(PREFIX + ChatColor.RED + "Usage: reset <player>");
-                        return false;
-                    }
+                    if (args.length != 2) throw new IllegalArgumentException("Usage: reset <player>");
                     deleteOverride(user);
-                    sender.sendMessage(PREFIX + "Overrides reset for " + user);
+                    sender.sendMessage(PREFIX + "Reset all overrides for " + user);
                 }
-                default -> sender.sendMessage(PREFIX + ChatColor.RED + "Unknown subcommand.");
+                default -> throw new IllegalArgumentException("Unknown subcommand.");
             }
         } catch (Exception e) {
-            sender.sendMessage(PREFIX + ChatColor.RED + "Error: " + e.getMessage());
+            sender.sendMessage(PREFIX + ChatColor.RED + e.getMessage());
         }
         return true;
     }
 
     // ------------------------------------------------------------------------
-    // Tab Completion for both commands
+    // Tab Completion
     // ------------------------------------------------------------------------
     @Override
-    public @Nullable List<String> onTabComplete(CommandSender sender,
-                                                Command cmd,
-                                                String alias,
-                                                String[] args) {
-        String name = cmd.getName().toLowerCase();
-        if (name.equals("tier")) {
-            if (args.length == 1) {
-                return suggestPlayers(args[0]);
-            } else if (args.length == 2) {
-                return suggestList(GAMEMODES, args[1]);
-            }
-        } else if (name.equals("simplemctiers")) {
-            if (args.length == 1) {
-                return suggestList(Arrays.asList("settier","setcombatrank","setpoints","reset"), args[0]);
-            }
-            if (args.length == 2) {
-                return suggestPlayers(args[1]);
-            }
+    public @Nullable List<String> onTabComplete(CommandSender s, Command cmd, String alias, String[] args) {
+        if (cmd.getName().equalsIgnoreCase("tier")) {
+            if (args.length == 1) return suggestPlayers(args[0]);
+            if (args.length == 2) return suggestList(GAMEMODES, args[1]);
+        } else {
+            if (args.length == 1) return suggestList(
+                    List.of("settier","setcombatrank","setpoints","reset"), args[0]
+            );
+            if (args.length == 2) return suggestPlayers(args[1]);
             if (args.length == 3) {
-                switch (args[0].toLowerCase()) {
-                    case "settier"    ->  { return suggestList(GAMEMODES, args[2]); }
-                    case "setcombatrank" -> { return suggestList(RANKS, args[2]); }
-                    default -> {}
+                if (args[0].equalsIgnoreCase("settier"))
+                    return suggestList(GAMEMODES, args[2]);
+                if (args[0].equalsIgnoreCase("setcombatrank"))
+                    return suggestList(COMBATRANKS, args[2]);
+            }
+            if (args.length == 4 && args[0].equalsIgnoreCase("settier")) {
+                // HT1..HT10 + LT1..LT10
+                List<String> codes = new ArrayList<>();
+                for (int i = 1; i <= 10; i++) {
+                    codes.add("HT"+i);
+                    codes.add("LT"+i);
                 }
+                return suggestList(codes, args[3]);
             }
         }
         return Collections.emptyList();
     }
 
     private List<String> suggestPlayers(String prefix) {
-        String lower = prefix.toLowerCase();
-        List<String> out = new ArrayList<>();
-        for (Player p : Bukkit.getOnlinePlayers()) {
-            if (p.getName().toLowerCase().startsWith(lower)) out.add(p.getName());
-        }
+        String low = prefix.toLowerCase(Locale.ROOT);
+        var out = new ArrayList<String>();
+        for (Player p : Bukkit.getOnlinePlayers())
+            if (p.getName().toLowerCase().startsWith(low)) out.add(p.getName());
         return out;
     }
     private List<String> suggestList(List<String> list, String prefix) {
-        String lower = prefix.toLowerCase();
-        List<String> out = new ArrayList<>();
-        for (String s : list) {
-            if (s.toLowerCase().startsWith(lower)) out.add(s);
-        }
+        String low = prefix.toLowerCase(Locale.ROOT);
+        var out = new ArrayList<String>();
+        for (String s : list)
+            if (s.toLowerCase().startsWith(low)) out.add(s);
         return out;
     }
 
     // ------------------------------------------------------------------------
-    // Database Helpers
+    // Overrides DB Helpers
     // ------------------------------------------------------------------------
     private void upsertOverride(String user, String mode, Integer tier,
                                 String combatrank, Integer points) throws SQLException {
         // read existing
+        Integer curTier = null; String curRank = null; Integer curPts = null;
         try (PreparedStatement sel = connection.prepareStatement(
                 "SELECT tier, combatrank, points FROM overrides WHERE username=? AND gamemode IS ?"
         )) {
             sel.setString(1, user);
             sel.setString(2, mode);
             ResultSet rs = sel.executeQuery();
-            Integer curTier = null;
-            String curRank = null;
-            Integer curPts = null;
             if (rs.next()) {
                 curTier = rs.getInt("tier");
-                curRank = rs.getString("combatrank");
+                curRank= rs.getString("combatrank");
                 curPts  = rs.getInt("points");
             }
-            curTier = (tier   != null) ? tier   : curTier;
-            curRank = (combatrank != null) ? combatrank : curRank;
-            curPts  = (points != null) ? points : curPts;
+        }
+        curTier = (tier   != null)? tier   : curTier;
+        curRank = (combatrank!=null)? combatrank:curRank;
+        curPts  = (points != null)? points : curPts;
 
-            try (PreparedStatement up = connection.prepareStatement(
-                    "REPLACE INTO overrides(username,gamemode,tier,combatrank,points) VALUES(?,?,?,?,?)"
-            )) {
-                up.setString(1, user);
-                up.setString(2, mode);
-                if (curTier   != null) up.setInt(3, curTier);   else up.setNull(3, Types.INTEGER);
-                if (curRank   != null) up.setString(4, curRank); else up.setNull(4, Types.VARCHAR);
-                if (curPts    != null) up.setInt(5, curPts);    else up.setNull(5, Types.INTEGER);
-                up.executeUpdate();
-            }
+        try (PreparedStatement up = connection.prepareStatement(
+                "REPLACE INTO overrides(username,gamemode,tier,combatrank,points) VALUES(?,?,?,?,?)"
+        )) {
+            up.setString(1, user);
+            up.setString(2, mode);
+            if (curTier   != null) up.setInt(3, curTier);   else up.setNull(3,Types.INTEGER);
+            if (curRank   != null) up.setString(4, curRank); else up.setNull(4,Types.VARCHAR);
+            if (curPts    != null) up.setInt(5, curPts);    else up.setNull(5,Types.INTEGER);
+            up.executeUpdate();
         }
     }
 
     private void deleteOverride(String user) throws SQLException {
         try (PreparedStatement d = connection.prepareStatement(
-                "DELETE FROM overrides WHERE username = ?"
+                "DELETE FROM overrides WHERE username=?"
         )) {
             d.setString(1, user);
             d.executeUpdate();
         }
     }
 
-    private Integer getOverrideTier(String user, String mode) {
+    private Integer getOverridePoints(String user) {
         try (PreparedStatement q = connection.prepareStatement(
-                "SELECT tier FROM overrides WHERE username=? AND gamemode=?"
+                "SELECT points FROM overrides WHERE username=? AND gamemode IS NULL"
         )) {
             q.setString(1, user);
-            q.setString(2, mode);
             ResultSet rs = q.executeQuery();
-            if (rs.next()) return rs.getInt("tier");
+            if (rs.next()) return rs.getInt("points");
         } catch (SQLException ignored) {}
         return null;
     }
@@ -313,19 +290,32 @@ public final class SimpleMCTiers extends JavaPlugin implements TabExecutor {
         return null;
     }
 
-    private Integer getOverridePoints(String user) {
-        try (PreparedStatement q = connection.prepareStatement(
-                "SELECT points FROM overrides WHERE username=? AND gamemode IS NULL"
-        )) {
-            q.setString(1, user);
-            ResultSet rs = q.executeQuery();
-            if (rs.next()) return rs.getInt("points");
-        } catch (SQLException ignored) {}
-        return null;
+    // ------------------------------------------------------------------------
+    // Combat Rank Recalc Helper
+    // ------------------------------------------------------------------------
+    private void recalcCombatRank(String user) throws Exception {
+        // get points override or from API
+        Integer ptsO = getOverridePoints(user);
+        int pts = (ptsO != null) ? ptsO : JsonParser
+                .parseString(fetchTierData(user))
+                .getAsJsonObject()
+                .get("points").getAsInt();
+
+        String rank;
+        if (pts >= 100) rank="S";
+        else if (pts >= 50) rank="X";
+        else if (pts >= 25) rank="V";
+        else if (pts >= 15) rank="IV";
+        else if (pts >= 10) rank="III";
+        else if (pts >= 5)  rank="II";
+        else if (pts >= 1)  rank="I";
+        else rank = null;
+
+        upsertOverride(user, null, null, rank, ptsO);
     }
 
     // ------------------------------------------------------------------------
-    // Data Fetching & Caching
+    // Data Fetching & Formatting
     // ------------------------------------------------------------------------
     private boolean isValidMinecraftUsername(String playerName) throws IOException {
         URL url = new URL(MOJANG_API_URL + playerName);
@@ -345,22 +335,15 @@ public final class SimpleMCTiers extends JavaPlugin implements TabExecutor {
         URL url = new URL(MCTIERS_API_URL + playerName);
         HttpURLConnection conn = (HttpURLConnection)url.openConnection();
         conn.setRequestMethod("GET");
-        if (conn.getResponseCode() == 404) {
-            // Treat as unregistered
-            return createErrorResponse(playerName);
-        }
-        if (conn.getResponseCode() != 200) {
-            return ChatColor.RED + "Error fetching data";
-        }
-
+        if (conn.getResponseCode() == 404) return createErrorResponse(playerName);
+        if (conn.getResponseCode() != 200) return ChatColor.RED+"Error";
         try (BufferedReader r = new BufferedReader(new InputStreamReader(conn.getInputStream()))) {
             StringBuilder sb = new StringBuilder(); String line;
             while ((line = r.readLine()) != null) sb.append(line);
             JsonObject json = JsonParser.parseString(sb.toString()).getAsJsonObject();
             if (!json.has("name")) return createErrorResponse(playerName);
-            String data = sb.toString();
-            cache.put(playerName, data);
-            return data;
+            cache.put(playerName, sb.toString());
+            return sb.toString();
         }
     }
 
@@ -373,19 +356,25 @@ public final class SimpleMCTiers extends JavaPlugin implements TabExecutor {
         return err.toString();
     }
 
-    // ------------------------------------------------------------------------
-    // Formatting Responses
-    // ------------------------------------------------------------------------
     private String formatSingleTier(String jsonResponse, String playerName, String gamemode) {
         JsonObject json = JsonParser.parseString(jsonResponse).getAsJsonObject();
         StringBuilder out = new StringBuilder(PREFIX);
-        Integer override = getOverrideTier(playerName, gamemode);
-        if (override != null) {
-            out.append(ChatColor.GREEN)
-                    .append(playerName).append("'s ")
+        Integer oT = null;
+        // override tier?
+        try {
+            PreparedStatement q = connection.prepareStatement(
+                    "SELECT tier FROM overrides WHERE username=? AND gamemode=?"
+            );
+            q.setString(1, playerName);
+            q.setString(2, gamemode);
+            ResultSet rs = q.executeQuery();
+            if (rs.next()) oT = rs.getInt("tier");
+        } catch (SQLException ignored) {}
+
+        if (oT != null) {
+            out.append(ChatColor.GREEN).append(playerName).append("'s ")
                     .append(capitalize(gamemode)).append(" Tier: ")
-                    .append(ChatColor.AQUA)
-                    .append((override == 0 ? "HT" : "LT") + override);
+                    .append(ChatColor.AQUA).append(oT);
             return out.toString();
         }
 
@@ -394,9 +383,8 @@ public final class SimpleMCTiers extends JavaPlugin implements TabExecutor {
             JsonObject r = ranks.getAsJsonObject(gamemode);
             int tier = r.get("tier").getAsInt();
             int pos  = r.get("pos").getAsInt();
-            String ts = (pos == 0 ? "HT" : "LT") + tier;
-            out.append(ChatColor.GREEN)
-                    .append(playerName).append("'s ")
+            String ts = (pos==0?"HT":"LT")+tier;
+            out.append(ChatColor.GREEN).append(playerName).append("'s ")
                     .append(capitalize(gamemode)).append(" Tier: ")
                     .append(ChatColor.AQUA).append(ts);
         } else {
@@ -406,62 +394,59 @@ public final class SimpleMCTiers extends JavaPlugin implements TabExecutor {
     }
 
     // ------------------------------------------------------------------------
-    // PlaceholderAPI Expansions
+    // PlaceholderAPI
     // ------------------------------------------------------------------------
     public class TierPlaceholderExpansion extends PlaceholderExpansion {
         private final SimpleMCTiers plugin;
-        public TierPlaceholderExpansion(SimpleMCTiers plugin) { this.plugin = plugin; }
-        @NotNull @Override public String getIdentifier() { return "tier"; }
-        @NotNull @Override public String getAuthor()     { return plugin.getDescription().getAuthors().toString(); }
-        @NotNull @Override public String getVersion()    { return plugin.getDescription().getVersion(); }
-        @Override public boolean persist()               { return true; }
-        @Override public boolean canRegister()           { return true; }
-
+        public TierPlaceholderExpansion(SimpleMCTiers plugin){this.plugin=plugin;}
+        @NotNull @Override public String getIdentifier(){return "tier";}
+        @NotNull @Override public String getAuthor(){return plugin.getDescription().getAuthors().toString();}
+        @NotNull @Override public String getVersion(){return plugin.getDescription().getVersion();}
+        @Override public boolean persist(){return true;}
+        @Override public boolean canRegister(){return true;}
         @Nullable @Override
-        public String onPlaceholderRequest(Player player, @NotNull String params) {
-            return formatSingleTierQuiet(player.getName(), params);
+        public String onPlaceholderRequest(Player p,@NotNull String params){
+            return formatSingleTierQuiet(p.getName(),params);
         }
-        private String formatSingleTierQuiet(String playerName, String gamemode) {
-            String json = "{}";
-            try { json = plugin.fetchTierData(playerName); }
-            catch (Exception ignored) {}
-            return plugin.formatSingleTier(json, playerName, gamemode);
+        private String formatSingleTierQuiet(String u,String m){
+            try {return plugin.formatSingleTier(plugin.fetchTierData(u),u,m);}
+            catch(Exception e){return ChatColor.RED+"N/A";}
         }
     }
 
     public class CombatRankPlaceholderExpansion extends PlaceholderExpansion {
         private final SimpleMCTiers plugin;
-        public CombatRankPlaceholderExpansion(SimpleMCTiers plugin) { this.plugin = plugin; }
-        @NotNull @Override public String getIdentifier() { return "combatrank"; }
-        @NotNull @Override public String getAuthor()     { return plugin.getDescription().getAuthors().toString(); }
-        @NotNull @Override public String getVersion()    { return plugin.getDescription().getVersion(); }
-        @Override public boolean persist()               { return true; }
-        @Override public boolean canRegister()           { return true; }
-
+        public CombatRankPlaceholderExpansion(SimpleMCTiers plugin){this.plugin=plugin;}
+        @NotNull @Override public String getIdentifier(){return "combatrank";}
+        @NotNull @Override public String getAuthor(){return plugin.getDescription().getAuthors().toString();}
+        @NotNull @Override public String getVersion(){return plugin.getDescription().getVersion();}
+        @Override public boolean persist(){return true;}
+        @Override public boolean canRegister(){return true;}
         @Nullable @Override
-        public String onPlaceholderRequest(Player player, @NotNull String params) {
+        public String onPlaceholderRequest(Player p,@NotNull String params){
             if (!params.equalsIgnoreCase("overall")) return null;
-            String user = player.getName();
+            String u = p.getName();
             // override?
-            String orank = getOverrideCombatRank(user);
-            if (orank != null) return orank;
-            // fetch points
-            String json = "{}";
-            try { json = plugin.fetchTierData(user); }
-            catch (Exception ignored) {}
-            JsonObject obj = JsonParser.parseString(json).getAsJsonObject();
-            int pts = obj.has("points") ? obj.get("points").getAsInt() : 0;
-            Integer opr = getOverridePoints(user);
-            if (opr != null) pts = opr;
-            // rank thresholds
-            if (pts >= 100) return "S";
-            if (pts >= 50)  return "X";
-            if (pts >= 25)  return "V";
-            if (pts >= 15)  return "IV";
-            if (pts >= 10)  return "III";
-            if (pts >= 5)   return "II";
-            if (pts >= 1)   return "I";
-            return ChatColor.RED + "N/A";
+            String or = getOverrideCombatRank(u);
+            if (or != null) return or;
+            // points
+            int pts;
+            Integer oP = getOverridePoints(u);
+            if (oP!=null) pts=oP;
+            else {
+                try { pts = JsonParser.parseString(fetchTierData(u))
+                        .getAsJsonObject().get("points").getAsInt();
+                } catch(Exception e){return ChatColor.RED+"N/A";}
+            }
+            // thresholds
+            if (pts>=100) return "S";
+            if (pts>=50)  return "X";
+            if (pts>=25)  return "V";
+            if (pts>=15)  return "IV";
+            if (pts>=10)  return "III";
+            if (pts>=5)   return "II";
+            if (pts>=1)   return "I";
+            return ChatColor.RED+"N/A";
         }
     }
 
@@ -469,7 +454,7 @@ public final class SimpleMCTiers extends JavaPlugin implements TabExecutor {
     // Utility
     // ------------------------------------------------------------------------
     private String capitalize(String s) {
-        if (s == null || s.isEmpty()) return s;
-        return s.substring(0,1).toUpperCase(Locale.ROOT) + s.substring(1);
+        if (s == null|| s.isEmpty()) return s;
+        return s.substring(0,1).toUpperCase(Locale.ROOT)+s.substring(1);
     }
 }

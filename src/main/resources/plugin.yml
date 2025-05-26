@@ -11,15 +11,11 @@ authors:
 commands:
   tier:
     description: Get the tier of a player in a specific gamemode.
-    usage: /<command> <player> <gamemode>
     permission: simplemctiers.tier
-    permission-message: You do not have permission to use this command.
 
   simplemctiers:
     description: Admin tool for SimpleMCTiers overrides.
-    usage: /simplemctiers <settier|setcombatrank|setpoints|reset> ...
     permission: simplemctiers.admin
-    permission-message: You do not have permission to use this command.
 
 permissions:
   simplemctiers.tier:
