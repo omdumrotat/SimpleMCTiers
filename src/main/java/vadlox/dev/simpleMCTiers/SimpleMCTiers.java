@@ -12,6 +12,7 @@ import java.sql.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import me.clip.placeholderapi.expansion.PlaceholderExpansion;
+import me.clip.placeholderapi.PlaceholderAPI;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.command.*;
@@ -55,6 +56,7 @@ public final class SimpleMCTiers extends JavaPlugin implements TabExecutor {
         if (Bukkit.getPluginManager().getPlugin("PlaceholderAPI") != null) {
             new TierPlaceholderExpansion(this).register();
             new CombatRankPlaceholderExpansion(this).register();
+            new EloTierPlaceholderExpansion(this).register();
         }
     }
 
@@ -388,7 +390,15 @@ public final class SimpleMCTiers extends JavaPlugin implements TabExecutor {
                     .append(capitalize(gamemode)).append(" Tier: ")
                     .append(ChatColor.AQUA).append(ts);
         } else {
-            out.append(ChatColor.RED).append("N/A");
+            // No tier found in mctiers.com, try ELO-based fallback
+            String eloTier = getEloBasedTier(playerName);
+            if (eloTier != null) {
+                out.append(ChatColor.GREEN).append(playerName).append("'s ")
+                        .append(capitalize(gamemode)).append(" Tier (ELO): ")
+                        .append(eloTier);
+            } else {
+                out.append(ChatColor.RED).append("N/A");
+            }
         }
         return out.toString();
     }
@@ -448,6 +458,81 @@ public final class SimpleMCTiers extends JavaPlugin implements TabExecutor {
             if (pts >= 1)   return ChatColor.DARK_GRAY + "I";   // &8
             return ChatColor.RED + "N/A";
 
+        }
+    }
+
+    public class EloTierPlaceholderExpansion extends PlaceholderExpansion {
+        private final SimpleMCTiers plugin;
+        public EloTierPlaceholderExpansion(SimpleMCTiers plugin){this.plugin=plugin;}
+        @NotNull @Override public String getIdentifier(){return "tiertag";}
+        @NotNull @Override public String getAuthor(){return plugin.getDescription().getAuthors().toString();}
+        @NotNull @Override public String getVersion(){return plugin.getDescription().getVersion();}
+        @Override public boolean persist(){return true;}
+        @Override public boolean canRegister(){return true;}
+        @Nullable @Override
+        public String onPlaceholderRequest(Player p,@NotNull String params){
+            if (!params.equalsIgnoreCase("tier")) return null;
+            String eloTier = plugin.getEloBasedTier(p.getName());
+            return eloTier != null ? eloTier : ChatColor.RED + "N/A";
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // ELO-based Tier Fallback (ported from pvp_tag.py)
+    // ------------------------------------------------------------------------
+    private String computeEloTier(double elo) {
+        // Tier calculation logic ported from pvp_tag.py
+        if (elo <= 500) {
+            return "&x&A&3&4&7&0&2LT5";
+        } else if (elo <= 6000) {
+            return "&x&D&2&5&D&0&4HT5";
+        } else if (elo <= 8000) {
+            return "&x&C&0&B&D&A&2LT4";
+        } else if (elo <= 10000) {
+            return "&x&E&B&E&A&C&8HT4";
+        } else if (elo <= 15000) {
+            return "&x&1&2&C&6&5&DLT3";
+        } else if (elo <= 20000) {
+            return "&x&0&4&F&9&6&AHT3";
+        } else if (elo <= 25000) {
+            return "&x&0&2&7&7&D&0LT2";
+        } else if (elo <= 30000) {
+            return "&x&2&1&C&9&F&BHT2";
+        } else if (elo <= 40000) {
+            return "&x&B&0&0&4&C&ELT1";
+        } else {
+            return "&x&F&9&0&6&E&CHT1";
+        }
+    }
+
+    private String getEloBasedTier(String playerName) {
+        // Try to get a Player object to use with PlaceholderAPI
+        Player player = Bukkit.getPlayer(playerName);
+        if (player == null) {
+            // Player is offline, try to get any online player for placeholder context
+            // This is a limitation - PlaceholderAPI needs a player context
+            return null;
+        }
+
+        try {
+            // Use PlaceholderAPI to get ELO data
+            String eloString = PlaceholderAPI.setPlaceholders(player, "%hnybpvpelo_elo%");
+            
+            if (eloString == null || eloString.equalsIgnoreCase("null") || eloString.trim().isEmpty()) {
+                return null;
+            }
+
+            double elo = Double.parseDouble(eloString);
+            String coloredTier = computeEloTier(elo);
+            
+            // Convert the colored tier code to a simpler format for display
+            // Extract the tier part (e.g., "LT5", "HT3") from the colored string
+            String tierCode = coloredTier.substring(coloredTier.length() - 3); // Get last 3 characters
+            
+            return ChatColor.translateAlternateColorCodes('&', coloredTier.replace(tierCode, "")) + tierCode;
+        } catch (NumberFormatException | IllegalStateException e) {
+            getLogger().warning("Failed to parse ELO for player " + playerName + ": " + e.getMessage());
+            return null;
         }
     }
 
