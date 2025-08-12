@@ -5,6 +5,7 @@ api-version: '1.21'
 description: The Ultimate Clans Plugin.
 website: vadlox.hydraquest.net
 depend: [ PlaceholderAPI ]
+folia-supported: true
 authors:
   - Vadlox
 

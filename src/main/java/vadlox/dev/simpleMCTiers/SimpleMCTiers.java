@@ -115,7 +115,8 @@ public final class SimpleMCTiers extends JavaPlugin implements TabExecutor {
             sender.sendMessage(PREFIX + ChatColor.RED + "Unknown gamemode.");
             return false;
         }
-        Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
+        // Use Folia-compatible scheduler with fallback
+        runAsyncTask(() -> {
             try {
                 String json = fetchTierData(user);
                 sender.sendMessage(formatSingleTier(json, user, mode));
@@ -533,6 +534,21 @@ public final class SimpleMCTiers extends JavaPlugin implements TabExecutor {
         } catch (NumberFormatException | IllegalStateException e) {
             getLogger().warning("Failed to parse ELO for player " + playerName + ": " + e.getMessage());
             return null;
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Folia Compatibility Helper
+    // ------------------------------------------------------------------------
+    private void runAsyncTask(Runnable task) {
+        try {
+            // Try to use Folia/Paper async scheduler first
+            Object asyncScheduler = getServer().getClass().getMethod("getAsyncScheduler").invoke(getServer());
+            asyncScheduler.getClass().getMethod("runNow", org.bukkit.plugin.Plugin.class, java.util.function.Consumer.class)
+                    .invoke(asyncScheduler, this, (java.util.function.Consumer<Object>) (scheduledTask) -> task.run());
+        } catch (Exception e) {
+            // Fall back to Bukkit scheduler for Spigot/older Paper
+            Bukkit.getScheduler().runTaskAsynchronously(this, task);
         }
     }
 
