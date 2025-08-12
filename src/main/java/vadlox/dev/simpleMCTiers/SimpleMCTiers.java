@@ -5,12 +5,15 @@ import com.google.gson.JsonParser;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.sql.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import me.clip.placeholderapi.expansion.PlaceholderExpansion;
 import me.clip.placeholderapi.PlaceholderAPI;
 import org.bukkit.Bukkit;
@@ -27,6 +30,8 @@ public final class SimpleMCTiers extends JavaPlugin implements TabExecutor {
     // ------------------------------------------------------------------------
     private static final String MOJANG_API_URL   = "https://api.mojang.com/users/profiles/minecraft/";
     private static final String MCTIERS_API_URL  = "https://mctiers.com/api/search_profile/";
+    // VanillaList live root (single page contains all tables)
+    private static final String VANILLALIST_URL  = "https://vanillalist.xyz/";
     private static final String PREFIX           = ChatColor.translateAlternateColorCodes('&', "&e&lTiers&8 » ");
     private static final List<String> GAMEMODES  = Arrays.asList(
             "axe","nethop","uhc","mace","smp","pot","vanilla","sword"
@@ -34,6 +39,8 @@ public final class SimpleMCTiers extends JavaPlugin implements TabExecutor {
     private static final List<String> COMBATRANKS= Arrays.asList("I","II","III","IV","V","X","S");
 
     private final ConcurrentHashMap<String, String> cache = new ConcurrentHashMap<>();
+    // VanillaList per-player cache (mode -> tier code, e.g. HT3)
+    private final ConcurrentHashMap<String, Map<String,String>> vanillaCache = new ConcurrentHashMap<>();
     private Connection connection;
 
     // ------------------------------------------------------------------------
@@ -57,6 +64,8 @@ public final class SimpleMCTiers extends JavaPlugin implements TabExecutor {
             new TierPlaceholderExpansion(this).register();
             new CombatRankPlaceholderExpansion(this).register();
             new EloTierPlaceholderExpansion(this).register();
+            // VanillaList specific placeholder: %vntier_<gamemode>%
+            new VanillaListPlaceholderExpansion(this).register();
         }
     }
 
@@ -64,6 +73,7 @@ public final class SimpleMCTiers extends JavaPlugin implements TabExecutor {
     public void onDisable() {
         getLogger().info("SimpleMCTiers has been disabled");
         cache.clear();
+        vanillaCache.clear();
         if (connection != null) try { connection.close(); } catch (SQLException ignored) {}
     }
 
@@ -391,21 +401,29 @@ public final class SimpleMCTiers extends JavaPlugin implements TabExecutor {
                     .append(capitalize(gamemode)).append(" Tier: ")
                     .append(ChatColor.AQUA).append(ts);
         } else {
-            // No tier found in mctiers.com, try ELO-based fallback
-            String eloTier = getEloBasedTier(playerName);
-            if (eloTier != null) {
+            // NEW: VanillaList fallback
+            String vanillaTier = getVanillaListTier(playerName, gamemode);
+            if (vanillaTier != null) {
                 out.append(ChatColor.GREEN).append(playerName).append("'s ")
-                        .append(capitalize(gamemode)).append(" Tier (ELO): ")
-                        .append(eloTier);
+                        .append(capitalize(gamemode)).append(" Tier (VNL): ")
+                        .append(ChatColor.AQUA).append(vanillaTier);
             } else {
-                out.append(ChatColor.RED).append("N/A");
+                // No tier found in mctiers.com or VanillaList, try ELO-based fallback
+                String eloTier = getEloBasedTier(playerName);
+                if (eloTier != null) {
+                    out.append(ChatColor.GREEN).append(playerName).append("'s ")
+                            .append(capitalize(gamemode)).append(" Tier (ELO): ")
+                            .append(eloTier);
+                } else {
+                    out.append(ChatColor.RED).append("N/A");
+                }
             }
         }
         return out.toString();
     }
 
     // ------------------------------------------------------------------------
-    // PlaceholderAPI
+    // PlaceholderAPI (original expansions restored)
     // ------------------------------------------------------------------------
     public class TierPlaceholderExpansion extends PlaceholderExpansion {
         private final SimpleMCTiers plugin;
@@ -420,8 +438,7 @@ public final class SimpleMCTiers extends JavaPlugin implements TabExecutor {
             return formatSingleTierQuiet(p.getName(),params);
         }
         private String formatSingleTierQuiet(String u,String m){
-            try {return plugin.formatSingleTier(plugin.fetchTierData(u),u,m);}
-            catch(Exception e){return ChatColor.RED+"N/A";}
+            try {return plugin.formatSingleTier(plugin.fetchTierData(u),u,m);} catch(Exception e){return ChatColor.RED+"N/A";}
         }
     }
 
@@ -437,28 +454,21 @@ public final class SimpleMCTiers extends JavaPlugin implements TabExecutor {
         public String onPlaceholderRequest(Player p,@NotNull String params){
             if (!params.equalsIgnoreCase("overall")) return null;
             String u = p.getName();
-            // override?
             String or = getOverrideCombatRank(u);
             if (or != null) return or;
-            // points
-            int pts;
-            Integer oP = getOverridePoints(u);
-            if (oP!=null) pts=oP;
-            else {
-                try { pts = JsonParser.parseString(fetchTierData(u))
-                        .getAsJsonObject().get("points").getAsInt();
-                } catch(Exception e){return ChatColor.RED+"N/A";}
+            int pts; Integer oP = getOverridePoints(u);
+            if (oP!=null) pts=oP; else {
+                try { pts = JsonParser.parseString(fetchTierData(u)).getAsJsonObject().get("points").getAsInt(); }
+                catch(Exception e){return ChatColor.RED+"N/A";}
             }
-// thresholds
-            if (pts >= 100) return ChatColor.YELLOW + "S";      // &e
-            if (pts >= 50)  return ChatColor.RED + "X";         // &c
-            if (pts >= 25)  return ChatColor.LIGHT_PURPLE + "V";// &d
-            if (pts >= 15)  return ChatColor.GRAY + "IV";       // &7
-            if (pts >= 10)  return ChatColor.GRAY + "III";      // &7
-            if (pts >= 5)   return ChatColor.GRAY + "II";       // &7
-            if (pts >= 1)   return ChatColor.DARK_GRAY + "I";   // &8
+            if (pts >= 100) return ChatColor.YELLOW + "S";
+            if (pts >= 50)  return ChatColor.RED + "X";
+            if (pts >= 25)  return ChatColor.LIGHT_PURPLE + "V";
+            if (pts >= 15)  return ChatColor.GRAY + "IV";
+            if (pts >= 10)  return ChatColor.GRAY + "III";
+            if (pts >= 5)   return ChatColor.GRAY + "II";
+            if (pts >= 1)   return ChatColor.DARK_GRAY + "I";
             return ChatColor.RED + "N/A";
-
         }
     }
 
@@ -473,66 +483,172 @@ public final class SimpleMCTiers extends JavaPlugin implements TabExecutor {
         @Nullable @Override
         public String onPlaceholderRequest(Player p,@NotNull String params){
             if (!params.equalsIgnoreCase("tier")) return null;
-            String eloTier = plugin.getEloBasedTier(p.getName());
+            String eloTier = getEloBasedTier(p.getName());
             return eloTier != null ? eloTier : ChatColor.RED + "N/A";
         }
     }
 
-    // ------------------------------------------------------------------------
-    // ELO-based Tier Fallback (ported from pvp_tag.py)
-    // ------------------------------------------------------------------------
-    private String computeEloTier(double elo) {
-        // Tier calculation logic ported from pvp_tag.py
-        if (elo <= 500) {
-            return "&x&A&3&4&7&0&2LT5";
-        } else if (elo <= 6000) {
-            return "&x&D&2&5&D&0&4HT5";
-        } else if (elo <= 8000) {
-            return "&x&C&0&B&D&A&2LT4";
-        } else if (elo <= 10000) {
-            return "&x&E&B&E&A&C&8HT4";
-        } else if (elo <= 15000) {
-            return "&x&1&2&C&6&5&DLT3";
-        } else if (elo <= 20000) {
-            return "&x&0&4&F&9&6&AHT3";
-        } else if (elo <= 25000) {
-            return "&x&0&2&7&7&D&0LT2";
-        } else if (elo <= 30000) {
-            return "&x&2&1&C&9&F&BHT2";
-        } else if (elo <= 40000) {
-            return "&x&B&0&0&4&C&ELT1";
-        } else {
-            return "&x&F&9&0&6&E&CHT1";
+    // NEW: VanillaList placeholder expansion for %vntier_<gamemode>%
+    public class VanillaListPlaceholderExpansion extends PlaceholderExpansion {
+        private final SimpleMCTiers plugin;
+        public VanillaListPlaceholderExpansion(SimpleMCTiers plugin){this.plugin=plugin;}
+        @NotNull @Override public String getIdentifier(){return "vntier";}
+        @NotNull @Override public String getAuthor(){return plugin.getDescription().getAuthors().toString();}
+        @NotNull @Override public String getVersion(){return plugin.getDescription().getVersion();}
+        @Override public boolean persist(){return true;}
+        @Override public boolean canRegister(){return true;}
+        @Nullable @Override
+        public String onPlaceholderRequest(Player p,@NotNull String params){
+            String mode = params.toLowerCase(Locale.ROOT);
+            if (!GAMEMODES.contains(mode)) return ChatColor.RED + "N/A";
+            String tier = getVanillaListTier(p.getName(), mode);
+            if (tier != null) return ChatColor.AQUA + tier;
+            // attempt live fetch again if not cached
+            vanillaCache.remove(p.getName());
+            tier = getVanillaListTier(p.getName(), mode);
+            return tier != null ? ChatColor.AQUA + tier : ChatColor.RED + "N/A";
         }
     }
 
-    private String getEloBasedTier(String playerName) {
-        // Try to get a Player object to use with PlaceholderAPI
-        Player player = Bukkit.getPlayer(playerName);
-        if (player == null) {
-            // Player is offline, try to get any online player for placeholder context
-            // This is a limitation - PlaceholderAPI needs a player context
+    // ------------------------------------------------------------------------
+    // VanillaList Parsing / Fallback
+    // ------------------------------------------------------------------------
+    private String getVanillaListTier(String playerName, String gamemode) {
+        try {
+            Map<String,String> tiers = vanillaCache.get(playerName);
+            if (tiers == null) {
+                tiers = fetchAndParseVanillaList(playerName);
+                if (tiers != null) vanillaCache.put(playerName, tiers);
+            }
+            if (tiers == null) return null;
+            // normalize gamemode mapping differences
+            String key = gamemode.toLowerCase(Locale.ROOT);
+            return tiers.getOrDefault(key, null);
+        } catch (Exception e) {
             return null;
         }
+    }
 
-        try {
-            // Use PlaceholderAPI to get ELO data
-            String eloString = PlaceholderAPI.setPlaceholders(player, "%hnybpvpelo_elo%");
-            
-            if (eloString == null || eloString.equalsIgnoreCase("null") || eloString.trim().isEmpty()) {
-                return null;
+    private Map<String,String> fetchAndParseVanillaList(String playerName) throws IOException {
+        String html = fetchVanillaListLive();
+        if (html == null) html = fetchVanillaListDownloadedFile(); // new intermediate layer
+        if (html == null) html = readVanillaListCached();
+        if (html == null) return null;
+        // Case-insensitive search for player row
+        Pattern rowPattern = Pattern.compile("<tr[^>]*>\\s*<td>\\d+</td>\\s*<td[^>]*>.*?data-name=\"" + Pattern.quote(playerName) + "\"[\\s\\S]*?</tr>", Pattern.CASE_INSENSITIVE);
+        Matcher rowMatcher = rowPattern.matcher(html);
+        if (!rowMatcher.find()) return null;
+        String rowHtml = rowMatcher.group();
+        // Extract each mode container: src ends with /<mode>.svg and span with tier code HT# or LT#
+        Pattern tierPattern = Pattern.compile("<div class=\"tier-mode-container\"[\\s\\S]*?<img[^>]+src=\\\"[^\\\"]*/([a-z0-9]+)\\.svg\\\"[\\s\\S]*?<span class=\\\"player-tier[^>]*>(H[Tt]|L[Tt])\\d+</span>", Pattern.CASE_INSENSITIVE);
+        Matcher tierMatcher = tierPattern.matcher(rowHtml);
+        Map<String,String> map = new HashMap<>();
+        while (tierMatcher.find()) {
+            String mode = tierMatcher.group(1).toLowerCase(Locale.ROOT);
+            String span = tierMatcher.group();
+            // capture the tier code inside last >...
+            Matcher codeM = Pattern.compile("(H[Tt]|L[Tt])\\d+").matcher(span);
+            if (codeM.find()) {
+                String code = codeM.group().toUpperCase(Locale.ROOT);
+                // map mode differences
+                if (mode.equals("diapot") || mode.equals("pot")) mode = "pot"; // safety
+                if (mode.equals("smp") || mode.equals("smpkit")) mode = "smp";
+                if (mode.equals("vanilla") || mode.equals("crystal")) mode = "vanilla";
+                map.put(mode, code);
             }
+        }
+        return map;
+    }
 
-            double elo = Double.parseDouble(eloString);
-            String coloredTier = computeEloTier(elo);
-            
-            // Convert the colored tier code to a simpler format for display
-            // Extract the tier part (e.g., "LT5", "HT3") from the colored string
-            String tierCode = coloredTier.substring(coloredTier.length() - 3); // Get last 3 characters
-            
-            return ChatColor.translateAlternateColorCodes('&', coloredTier.replace(tierCode, "")) + tierCode;
-        } catch (NumberFormatException | IllegalStateException e) {
-            getLogger().warning("Failed to parse ELO for player " + playerName + ": " + e.getMessage());
+    private String fetchVanillaListLive() {
+        try {
+            // try base and anchor variant
+            String base = attemptVanillaListFetch(VANILLALIST_URL);
+            if (base != null) return base;
+            return attemptVanillaListFetch(VANILLALIST_URL + "#crystal");
+        } catch (Exception ignored) { return null; }
+    }
+
+    private String attemptVanillaListFetch(String urlStr) {
+        try {
+            URL url = new URL(urlStr);
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(4000);
+            conn.setReadTimeout(4000);
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (JavaPlugin; +https://example.org)");
+            conn.setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+            if (conn.getResponseCode() != 200) return null;
+            try (BufferedReader r = new BufferedReader(new InputStreamReader(conn.getInputStream()))) {
+                StringBuilder sb = new StringBuilder();
+                String line; while ((line = r.readLine()) != null) sb.append(line).append('\n');
+                return sb.toString();
+            }
+        } catch (Exception e) { return null; }
+    }
+
+    // Try to download and cache a full html file on disk (plugins/SimpleMCTiers/vanillalist_live.html)
+    private String fetchVanillaListDownloadedFile() {
+        File f = new File(getDataFolder(), "vanillalist_live.html");
+        long now = System.currentTimeMillis();
+        // reuse if exists and younger than 6h
+        if (f.exists() && (now - f.lastModified()) < 6 * 60 * 60 * 1000L) {
+            try { return readFileContents(f); } catch (IOException ignored) {}
+        }
+        // attempt fresh download with more lenient timeouts
+        try {
+            String content = attemptVanillaListFetch(VANILLALIST_URL + "?ts=" + now);
+            if (content == null) content = attemptVanillaListFetch(VANILLALIST_URL + "#crystal");
+            if (content != null && content.length() > 500) { // basic sanity
+                try (java.io.FileWriter w = new java.io.FileWriter(f)) { w.write(content); }
+                return content;
+            }
+        } catch (Exception ignored) { }
+        // if download failed but old file exists, use it anyway
+        if (f.exists()) {
+            try { return readFileContents(f); } catch (IOException ignored) {}
+        }
+        return null;
+    }
+
+    private String readFileContents(File f) throws IOException {
+        try (BufferedReader r = new BufferedReader(new InputStreamReader(new java.io.FileInputStream(f)))) {
+            StringBuilder sb = new StringBuilder();
+            String line; while ((line = r.readLine()) != null) sb.append(line).append('\n');
+            return sb.toString();
+        }
+    }
+
+    private String readVanillaListCached() {
+        try (InputStream is = getResource("vanillalist_cached.html")) {
+            if (is == null) return null;
+            try (BufferedReader r = new BufferedReader(new InputStreamReader(is))) {
+                StringBuilder sb = new StringBuilder();
+                String line; while ((line = r.readLine()) != null) sb.append(line).append('\n');
+                return sb.toString();
+            }
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // NEW: ELO based fallback (simple mapping from points -> rank colours)
+    // ------------------------------------------------------------------------
+    private String getEloBasedTier(String playerName) {
+        try {
+            Integer ptsO = getOverridePoints(playerName);
+            int pts = (ptsO != null) ? ptsO : JsonParser.parseString(fetchTierData(playerName))
+                    .getAsJsonObject().get("points").getAsInt();
+            if (pts >= 100) return ChatColor.YELLOW + "S";
+            if (pts >= 50)  return ChatColor.RED + "X";
+            if (pts >= 25)  return ChatColor.LIGHT_PURPLE + "V";
+            if (pts >= 15)  return ChatColor.GRAY + "IV";
+            if (pts >= 10)  return ChatColor.GRAY + "III";
+            if (pts >= 5)   return ChatColor.GRAY + "II";
+            if (pts >= 1)   return ChatColor.DARK_GRAY + "I";
+            return null;
+        } catch (Exception e) {
             return null;
         }
     }
