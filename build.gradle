@@ -9,6 +9,10 @@ version = '1.0'
 repositories {
     mavenCentral()
     maven {
+        name = "papermc-repo"
+        url = "https://repo.papermc.io/repository/maven-public/"
+    }
+    maven {
         name = "spigotmc-repo"
         url = "https://hub.spigotmc.org/nexus/content/repositories/snapshots/"
     }
@@ -23,7 +27,7 @@ repositories {
 
 
 dependencies {
-    compileOnly("org.spigotmc:spigot-api:1.21.4-R0.1-SNAPSHOT")
+    compileOnly("io.papermc.paper:paper-api:1.21.4-R0.1-SNAPSHOT")
     compileOnly 'me.clip:placeholderapi:2.11.6'
 }
 
